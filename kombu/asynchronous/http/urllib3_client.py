@@ -54,25 +54,25 @@ class Urllib3Client(BaseClient):
         hub = hub or get_event_loop()
         super().__init__(hub)
         self.max_clients = max_clients
-        debug('urllib3: max_clients=%r', max_clients)
+        print('urllib3: max_clients=%r', max_clients)
         self._pending = deque()
         self._timeout_check_tref = self.hub.call_repeatedly(
             1.0, self._timeout_check,
         )
 
     def pools_close(self):
-        debug('urllib3: pools_close. start')
+        print('urllib3: pools_close. start')
         for pool in self._pools.values():
             pool.close()
-            debug('urllib3: self._pools.closed')
+            print('urllib3: self._pools.closed')
         self._pools.clear()
-        debug('urllib3: pools_close. end')
+        print('urllib3: pools_close. end')
 
     def close(self):
-        debug('urllib3: close. start')
+        print('urllib3: close. start')
         self._timeout_check_tref.cancel()
         self.pools_close()
-        debug('urllib3: pools_close. end')
+        print('urllib3: pools_close. end')
 
     def add_request(self, request):
         self._pending.append(request)
@@ -107,13 +107,13 @@ class Urllib3Client(BaseClient):
                 _pool_key_parts.append(f"proxy_headers={str(proxy_headers)}")
 
         _pool_key = "|".join(_pool_key_parts)
-        debug(f'urllib3: get_pool._pool_key={_pool_key}')
+        print(f'urllib3: get_pool._pool_key={_pool_key}')
         if _pool_key in self._pools:
-            debug(f'urllib3: get_pool. pool exists')
+            print(f'urllib3: get_pool. pool exists')
             return self._pools[_pool_key]
 
         # create new pool
-        debug(f'urllib3: get_pool. new pool')
+        print(f'urllib3: get_pool. new pool')
         if _proxy_url:
             _pool = urllib3.ProxyManager(
                 proxy_url=_proxy_url,
@@ -121,7 +121,7 @@ class Urllib3Client(BaseClient):
                 proxy_headers=proxy_headers
             )
         else:
-            debug(f'urllib3: get_pool. urllib3.PoolManager(num_pools={self.max_clients})')
+            print(f'urllib3: get_pool. urllib3.PoolManager(num_pools={self.max_clients})')
             _pool = urllib3.PoolManager(num_pools=self.max_clients)
 
         # Network Interface
@@ -146,7 +146,7 @@ class Urllib3Client(BaseClient):
                 _pool.connection_pool_kw['ca_certs'] = where()
             except ImportError:
                 pass
-        debug(f"urllib3: get_pool. ca_certs={_pool.connection_pool_kw['ca_certs']})")
+        print(f"urllib3: get_pool. ca_certs={_pool.connection_pool_kw['ca_certs']})")
 
         # Client Certificates
         if request.client_cert is not None:
@@ -162,13 +162,13 @@ class Urllib3Client(BaseClient):
         self._process_pending_requests()
 
     def _process_pending_requests(self):
-        debug('urllib3: _process_pending_requests')
+        print('urllib3: _process_pending_requests')
         while self._pending:
             request = self._pending.popleft()
             self._process_request(request)
 
     def _process_request(self, request: Request):
-        debug('urllib3: _process_request: %r', request)
+        print('urllib3: _process_request: %r', request)
         # Prepare headers
         headers = request.headers
         headers.setdefault(
@@ -224,7 +224,7 @@ class Urllib3Client(BaseClient):
         request.on_ready(response_obj)
 
     def _process_queue(self):
-        debug('urllib3: _process_queue')
+        print('urllib3: _process_queue')
         self._process_pending_requests()
 
     def on_readable(self, fd):
