@@ -44,6 +44,7 @@ class CurlClient(BaseClient):
         hub = hub or get_event_loop()
         super().__init__(hub)
         self.max_clients = max_clients
+        print('pycurl: max_clients=%r', max_clients)
 
         self._multi = pycurl.CurlMulti()
         self._multi.setopt(pycurl.M_TIMERFUNCTION, self._set_timeout)
@@ -64,10 +65,12 @@ class CurlClient(BaseClient):
         self._multi.remove_handle(dummy_curl_handle)
 
     def close(self):
+        print('pycurl: close. start')
         self._timeout_check_tref.cancel()
         for _curl in self._curls:
             _curl.close()
         self._multi.close()
+        print('pycurl: close. end')
 
     def add_request(self, request):
         self._pending.append(request)
@@ -139,6 +142,7 @@ class CurlClient(BaseClient):
         self._process_pending_requests()
 
     def _process_pending_requests(self):
+        print('pycurl: _process_pending_requests')
         while 1:
             q, succeeded, failed = self._multi.info_read()
             for curl in succeeded:
@@ -150,6 +154,7 @@ class CurlClient(BaseClient):
         self._process_queue()
 
     def _process_queue(self):
+        print('pycurl: _process_queue')
         while 1:
             started = 0
             while self._free_list and self._pending:
@@ -170,6 +175,7 @@ class CurlClient(BaseClient):
                 break
 
     def _process(self, curl, errno=None, reason=None, _pycurl=pycurl):
+        print('pycurl: _process')
         info, curl.info = curl.info, None
         self._multi.remove_handle(curl)
         self._free_list.append(curl)
@@ -194,6 +200,7 @@ class CurlClient(BaseClient):
         ))
 
     def _setup_request(self, curl, request, buffer, headers, _pycurl=pycurl):
+        print('pycurl: _setup_request')
         setopt = curl.setopt
         setopt(_pycurl.URL, bytes_to_str(request.url))
 
