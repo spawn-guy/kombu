@@ -72,7 +72,7 @@ class Urllib3Client(BaseClient):
         print('urllib3: close. start')
         self._timeout_check_tref.cancel()
         self.pools_close()
-        print('urllib3: pools_close. end')
+        print('urllib3: close. end')
 
     def add_request(self, request):
         self._pending.append(request)
