@@ -12,8 +12,6 @@ from .base import BaseClient, Request
 
 __all__ = ('Urllib3Client',)
 
-from ...utils.encoding import bytes_to_str
-
 DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; urllib3)'
 EXTRA_METHODS = frozenset(['DELETE', 'OPTIONS', 'PATCH'])
 
@@ -104,11 +102,15 @@ class Urllib3Client(BaseClient):
         if _proxy_url:
             _pool = urllib3.ProxyManager(
                 proxy_url=_proxy_url,
-                num_pools=self.max_clients,
-                proxy_headers=proxy_headers
+                proxy_headers=proxy_headers,
+                maxsize=self.max_clients,
+                block=True
             )
         else:
-            _pool = urllib3.PoolManager(num_pools=self.max_clients)
+            _pool = urllib3.PoolManager(
+                maxsize=self.max_clients,
+                block=True
+            )
 
         # Network Interface
         if request.network_interface:
@@ -154,13 +156,12 @@ class Urllib3Client(BaseClient):
     def _process_request(self, request: Request):
         # Prepare headers
         headers = request.headers
-        headers.setdefault(
-            'User-Agent',
-            bytes_to_str(request.user_agent or DEFAULT_USER_AGENT)
-        )
-        headers.setdefault(
-            'Accept-Encoding',
-            'gzip,deflate' if request.use_gzip else 'none'
+
+        headers.update(
+            urllib3.util.make_headers(
+                user_agent=request.user_agent or DEFAULT_USER_AGENT,
+                accept_encoding=request.use_gzip,
+            )
         )
 
         # Authentication
@@ -177,7 +178,7 @@ class Urllib3Client(BaseClient):
         # Make the request using urllib3
         try:
             _pool = self.get_pool(request=request)
-            response = _pool.request(
+            response_conn = _pool.request(
                 request.method,
                 request.url,
                 headers=headers,
@@ -185,15 +186,16 @@ class Urllib3Client(BaseClient):
                 preload_content=False,
                 redirect=request.follow_redirects,
             )
-            buffer = BytesIO(response.data)
+            buffer = BytesIO(response_conn.read())
             response_obj = self.Response(
                 request=request,
-                code=response.status,
-                headers=response.headers,
+                code=response_conn.status,
+                headers=response_conn.headers,
                 buffer=buffer,
-                effective_url=response.geturl(),
+                effective_url=response_conn.geturl(),
                 error=None
             )
+            response_conn.release_conn()
         except urllib3.exceptions.HTTPError as e:
             response_obj = self.Response(
                 request=request,
