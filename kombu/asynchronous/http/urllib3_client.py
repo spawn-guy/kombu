@@ -33,7 +33,6 @@ class Urllib3Client(BaseClient):
 
         # Thread pool for concurrent requests
         self._executor = ThreadPoolExecutor(max_workers=max_clients)
-        self._pools = {}  # Connection pools by host/proxy combination
         self._pending = deque()
         self._active_requests = {}  # Track active requests
         self._request_lock = threading.RLock()  # Thread safety
@@ -46,8 +45,6 @@ class Urllib3Client(BaseClient):
         """Close the client and all connection pools."""
         self._timeout_check_tref.cancel()
         self._executor.shutdown(wait=False)
-        for pool in self._pools.values():
-            pool.close()
 
     def add_request(self, request):
         """Add a request to the pending queue."""
