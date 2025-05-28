@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import urllib3
-from urllib3.util import make_headers, Url, Timeout
+from urllib3.util import Timeout, Url, make_headers
 
 from kombu.asynchronous.hub import Hub, get_event_loop
 from kombu.exceptions import HttpError
