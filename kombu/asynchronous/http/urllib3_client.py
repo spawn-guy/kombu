@@ -1,4 +1,4 @@
-"""HTTP Client using urllib3."""
+"""HTTP Client using urllib3"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from time import time
 
 import urllib3
 from urllib3.util import make_headers, Url, Timeout
@@ -27,7 +26,7 @@ class Urllib3Client(BaseClient):
 
     def __init__(self, hub: Hub | None = None, max_clients: int = 10):
         if urllib3 is None:
-            raise ImportError('The curl client requires the urllib3 library.')
+            raise ImportError('The urllib3 client requires the urllib3 library.')
         hub = hub or get_event_loop()
         super().__init__(hub)
         self.max_clients = max_clients
@@ -133,7 +132,7 @@ class Urllib3Client(BaseClient):
         self._process_queue()
 
     def _execute_request(self, request):
-        """Execute a single request using urllib3."""
+        """Execute a single request using urllib3"""
         # Prepare headers
         headers = dict(request.headers)
         headers.update(
@@ -157,7 +156,6 @@ class Urllib3Client(BaseClient):
 
         # Make the request using urllib3
         try:
-            start_time = time()
             pool = self._get_pool(request)
 
             # Set timeout
@@ -185,7 +183,6 @@ class Urllib3Client(BaseClient):
                 effective_url=response.geturl() if hasattr(response, 'geturl') else request.url,
                 error=None
             )
-            response.release_conn()
         except Exception as e:
             # Handle any errors
             response_obj = self.Response(
