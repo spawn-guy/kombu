@@ -1,14 +1,18 @@
+"""HTTP Client using urllib3."""
+
 from __future__ import annotations
 
 from collections import deque
 from io import BytesIO
 
 import urllib3
+from urllib3.exceptions import HTTPError
+from urllib3.util import Url, make_headers
 
 from kombu.asynchronous.hub import Hub, get_event_loop
 from kombu.exceptions import HttpError
 
-from .base import BaseClient, Request
+from .base import BaseClient
 
 __all__ = ('Urllib3Client',)
 
@@ -16,149 +20,117 @@ DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; urllib3)'
 EXTRA_METHODS = frozenset(['DELETE', 'OPTIONS', 'PATCH'])
 
 
-def _get_pool_key_parts(request: Request) -> list[str]:
-    _pool_key_parts = []
-
-    if request.network_interface:
-        _pool_key_parts.append(f"interface={request.network_interface}")
-
-    if request.validate_cert:
-        _pool_key_parts.append("validate_cert=True")
-    else:
-        _pool_key_parts.append("validate_cert=False")
-
-    if request.ca_certs:
-        _pool_key_parts.append(f"ca_certs={request.ca_certs}")
-
-    if request.client_cert:
-        _pool_key_parts.append(f"client_cert={request.client_cert}")
-
-    if request.client_key:
-        _pool_key_parts.append(f"client_key={request.client_key}")
-
-    return _pool_key_parts
-
-
 class Urllib3Client(BaseClient):
-    """Urllib3 HTTP Client."""
-
-    _pools = {}
+    """Urllib3Client HTTP Client (using urllib3)."""
 
     def __init__(self, hub: Hub | None = None, max_clients: int = 10):
         hub = hub or get_event_loop()
         super().__init__(hub)
         self.max_clients = max_clients
         self._pending = deque()
+        self._pools = {}
         self._timeout_check_tref = self.hub.call_repeatedly(
             1.0, self._timeout_check,
         )
 
-    def pools_close(self):
+    def close(self):
+        """Close the client and all connection pools."""
+        self._timeout_check_tref.cancel()
         for pool in self._pools.values():
             pool.close()
         self._pools.clear()
 
-    def close(self):
-        self._timeout_check_tref.cancel()
-        self.pools_close()
-
     def add_request(self, request):
+        """Add a request to the pending queue."""
         self._pending.append(request)
         self._process_queue()
         return request
 
-    def get_pool(self, request: Request):
-        _pool_key_parts = _get_pool_key_parts(request=request)
-
-        _proxy_url = None
-        proxy_headers = None
-        if request.proxy_host:
-            _proxy_url = urllib3.util.Url(
-                scheme=None,
-                host=request.proxy_host,
-                port=request.proxy_port,
-            )
-            if request.proxy_username:
-                proxy_headers = urllib3.make_headers(
-                    proxy_basic_auth=(
-                        f"{request.proxy_username}"
-                        f":{request.proxy_password}"
-                    )
-                )
-            else:
-                proxy_headers = None
-
-            _proxy_url = _proxy_url.url
-
-            _pool_key_parts.append(f"proxy={_proxy_url}")
-            if proxy_headers:
-                _pool_key_parts.append(f"proxy_headers={str(proxy_headers)}")
-
-        _pool_key = "|".join(_pool_key_parts)
-        if _pool_key in self._pools:
-            return self._pools[_pool_key]
-
-        # create new pool
-        if _proxy_url:
-            _pool = urllib3.ProxyManager(
-                proxy_url=_proxy_url,
-                proxy_headers=proxy_headers,
-                maxsize=self.max_clients,
-                block=True
-            )
-        else:
-            _pool = urllib3.PoolManager(
-                maxsize=self.max_clients,
-                block=True
-            )
+    def _get_pool(self, request):
+        """Get or create a connection pool for the request."""
+        # Prepare connection kwargs
+        conn_kwargs = {}
 
         # Network Interface
         if request.network_interface:
-            _pool.connection_pool_kw['source_address'] = (
-                request.network_interface,
-                0
-            )
+            conn_kwargs['source_address'] = (request.network_interface, 0)
 
         # SSL Verification
-        if request.validate_cert:
-            _pool.connection_pool_kw['cert_reqs'] = 'CERT_REQUIRED'
-        else:
-            _pool.connection_pool_kw['cert_reqs'] = 'CERT_NONE'
+        conn_kwargs['cert_reqs'] = 'CERT_REQUIRED' if request.validate_cert else 'CERT_NONE'
 
         # CA Certificates
         if request.ca_certs is not None:
-            _pool.connection_pool_kw['ca_certs'] = request.ca_certs
+            conn_kwargs['ca_certs'] = request.ca_certs
         elif request.validate_cert is True:
             try:
                 from certifi import where
-                _pool.connection_pool_kw['ca_certs'] = where()
+                conn_kwargs['ca_certs'] = where()
             except ImportError:
                 pass
 
         # Client Certificates
         if request.client_cert is not None:
-            _pool.connection_pool_kw['cert_file'] = request.client_cert
+            conn_kwargs['cert_file'] = request.client_cert
         if request.client_key is not None:
-            _pool.connection_pool_kw['key_file'] = request.client_key
+            conn_kwargs['key_file'] = request.client_key
 
-        self._pools[_pool_key] = _pool
+        # Handle proxy configuration
+        if request.proxy_host:
+            conn_kwargs['_proxy'] = Url(
+                scheme=None,
+                host=request.proxy_host,
+                port=request.proxy_port,
+            ).url
 
-        return _pool
+            if request.proxy_username:
+                conn_kwargs['_proxy_headers'] = make_headers(
+                    proxy_basic_auth=f"{request.proxy_username}:{request.proxy_password or ''}"
+                )
+
+        pool = urllib3.connection_from_url(request.url, **conn_kwargs)
+        return pool
+
+        # # Create pool key
+        # key = (request.url, request.proxy_host, request.proxy_port)
+
+        # if key in self._pools:
+        #     return self._pools[key]
+        #
+        # # Create appropriate pool based on proxy settings
+        # if proxy_url:
+        #     pool = urllib3.ProxyManager(
+        #         proxy_url=proxy_url,
+        #         proxy_headers=proxy_headers,
+        #         maxsize=self.max_clients,
+        #         block=True,
+        #         **{k: v for k, v in conn_kwargs.items() if not k.startswith('_')}
+        #     )
+        # else:
+        #     pool = urllib3.PoolManager(
+        #         maxsize=self.max_clients,
+        #         block=True,
+        #         **conn_kwargs
+        #     )
+        #
+        # self._pools[key] = pool
+        # return pool
 
     def _timeout_check(self):
+        """Check for timeouts and process pending requests."""
         self._process_pending_requests()
 
     def _process_pending_requests(self):
+        """Process all pending requests."""
         while self._pending:
             request = self._pending.popleft()
             self._process_request(request)
 
-    def _process_request(self, request: Request):
+    def _process_request(self, request):
+        """Process a single request using urllib3."""
         # Prepare headers
-        headers = request.headers
-
+        headers = dict(request.headers)
         headers.update(
-            urllib3.util.make_headers(
+            make_headers(
                 user_agent=request.user_agent or DEFAULT_USER_AGENT,
                 accept_encoding=request.use_gzip,
             )
@@ -167,36 +139,40 @@ class Urllib3Client(BaseClient):
         # Authentication
         if request.auth_username is not None:
             headers.update(
-                urllib3.util.make_headers(
-                    basic_auth=(
-                        f"{request.auth_username}"
-                        f":{request.auth_password or ''}"
-                    )
+                make_headers(
+                    basic_auth=f"{request.auth_username}:{request.auth_password or ''}"
                 )
             )
 
+        # Process request body
+        body = None
+        if request.body:
+            body = request.body if isinstance(request.body, bytes) else request.body.encode('utf-8')
+
         # Make the request using urllib3
         try:
-            _pool = self.get_pool(request=request)
-            response_conn = _pool.request(
+            pool = self._get_pool(request)
+            response = pool.request(
                 request.method,
                 request.url,
                 headers=headers,
-                body=request.body,
+                body=body,
                 preload_content=False,
                 redirect=request.follow_redirects,
+                retries=False,  # Handle redirects manually to match pycurl behavior
             )
-            buffer = BytesIO(response_conn.read())
+
+            buffer = BytesIO(response.data)
             response_obj = self.Response(
                 request=request,
-                code=response_conn.status,
-                headers=response_conn.headers,
+                code=response.status,
+                headers=response.headers,
                 buffer=buffer,
-                effective_url=response_conn.geturl(),
+                effective_url=response.geturl(),
                 error=None
             )
-            response_conn.release_conn()
-        except urllib3.exceptions.HTTPError as e:
+            response.release_conn()
+        except HTTPError as e:
             response_obj = self.Response(
                 request=request,
                 code=599,
@@ -209,13 +185,13 @@ class Urllib3Client(BaseClient):
         request.on_ready(response_obj)
 
     def _process_queue(self):
+        """Process the request queue."""
         self._process_pending_requests()
 
     def on_readable(self, fd):
+        """Compatibility method for the event loop."""
         pass
 
     def on_writable(self, fd):
-        pass
-
-    def _setup_request(self, curl, request, buffer, headers):
+        """Compatibility method for the event loop."""
         pass
